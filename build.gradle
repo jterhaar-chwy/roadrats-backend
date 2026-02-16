@@ -1,6 +1,6 @@
 plugins {
 	id 'java'
-	id 'org.springframework.boot' version '4.0.2'
+	id 'org.springframework.boot' version '3.3.5'
 	id 'io.spring.dependency-management' version '1.1.7'
 }
 
@@ -20,11 +20,67 @@ repositories {
 
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter'
+	implementation 'org.springframework.boot:spring-boot-starter-web'
+	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+	implementation 'org.springframework.boot:spring-boot-starter-validation'
+	developmentOnly 'org.springframework.boot:spring-boot-devtools'
 	runtimeOnly 'com.microsoft.sqlserver:mssql-jdbc'
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+	testRuntimeOnly 'com.h2database:h2'
 }
 
 tasks.named('test') {
 	useJUnitPlatform()
+}
+
+// Use manually placed sqljdbc_auth.dll from build/native-libs/
+// The DLL must be downloaded separately and placed in build/native-libs/
+
+// Make the DLL available at runtime
+// IMPORTANT: Set jvmArgs during configuration phase (not doFirst) so JVM can find DLL
+bootRun {
+	def nativeLibsDir = file("${buildDir}/native-libs")
+	def nativeLibsPath = nativeLibsDir.absolutePath
+	
+	// Set java.library.path BEFORE JVM starts (configuration phase, not execution)
+	// This ensures the DLL is available when the JDBC driver tries to load it
+	// Note: We prepend our path, but the system will still search system paths
+	jvmArgs = ["-Djava.library.path=${nativeLibsPath}"]
+	
+	doFirst {
+		// Log what we're doing
+		if (nativeLibsDir.exists()) {
+			def dllFiles = fileTree(nativeLibsDir).matching { include '**/*.dll' }
+			if (!dllFiles.isEmpty()) {
+				println "========================================"
+				println "Found DLL(s):"
+				dllFiles.each { file ->
+					println "  - ${file.absolutePath}"
+				}
+				println "JVM arg: -Djava.library.path=${nativeLibsPath}"
+				println "NOTE: JDBC driver is 12.6.4, DLL is from 13.2.1"
+				println "If this fails, try downloading DLL from JDBC 12.6.4 package"
+				println "========================================"
+			} else {
+				println "WARNING: No DLL files found in ${nativeLibsPath}"
+			}
+		}
+	}
+}
+
+// Also set DLL path for tests
+test {
+	doFirst {
+		def nativeLibsDir = file("${buildDir}/native-libs")
+		if (nativeLibsDir.exists()) {
+			def dllFiles = fileTree(nativeLibsDir).matching { include '**/*.dll' }
+			if (!dllFiles.isEmpty()) {
+				def nativeLibsPath = nativeLibsDir.absolutePath
+				def currentLibPath = System.getProperty('java.library.path', '')
+				def newLibPath = currentLibPath.isEmpty() ? nativeLibsPath : "${nativeLibsPath};${currentLibPath}"
+				systemProperty 'java.library.path', newLibPath
+			}
+		}
+	}
 }

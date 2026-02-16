@@ -35,3 +35,10 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### Environment Files ###
+.env
+.env.local
+.env.*.local
+application-local.properties
+application-dev.properties
