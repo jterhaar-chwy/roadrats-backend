@@ -8,7 +8,10 @@ import org.springframework.boot.test.context.SpringBootTest;
     "spring.datasource.cls.driver-class-name=org.h2.Driver",
     "spring.datasource.io.url=jdbc:h2:mem:testdb2",
     "spring.datasource.io.driver-class-name=org.h2.Driver",
-    "spring.jpa.hibernate.ddl-auto=create-drop"
+    "spring.jpa.hibernate.ddl-auto=create-drop",
+    "roadrats.dberrors.servers=localhost",
+    "roadrats.dberrors.database=testdb",
+    "roadrats.dberrors.driver-class-name=org.h2.Driver"
 })
 class RoadratsBackendApplicationTests {
 
