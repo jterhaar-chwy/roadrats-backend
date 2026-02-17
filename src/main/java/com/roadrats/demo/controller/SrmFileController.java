@@ -1,6 +1,7 @@
 package com.roadrats.demo.controller;
 
 import com.roadrats.demo.service.SrmFileService;
+import com.roadrats.demo.service.SrmValidationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,6 +21,9 @@ public class SrmFileController {
 
     @Autowired
     private SrmFileService srmFileService;
+
+    @Autowired
+    private SrmValidationService srmValidationService;
 
     @GetMapping("/version")
     public ResponseEntity<Map<String, Object>> getSrmVersion() {
@@ -83,7 +87,7 @@ public class SrmFileController {
     public ResponseEntity<Map<String, Object>> copySrmFilesToLocal() {
         try {
             logger.info("Verifying SRM files in local directory...");
-            Map<String, Object> result = srmFileService.copySrmFilesToLocal();
+            Map<String, Object> result = srmFileService.copySrmFilesToLocal(false);
             
             if (Boolean.FALSE.equals(result.get("success"))) {
                 logger.error("File verification failed: {}", result.get("error"));
@@ -100,6 +104,45 @@ public class SrmFileController {
             if (e.getCause() != null) {
                 error.put("cause", e.getCause().getMessage());
             }
+            return ResponseEntity.status(500).body(error);
+        }
+    }
+
+    @GetMapping("/check-existing")
+    public ResponseEntity<Map<String, Object>> checkExistingFiles() {
+        try {
+            logger.info("Checking for existing SRM files...");
+            boolean hasFiles = srmFileService.hasExistingSrmFiles();
+            Map<String, Object> response = new HashMap<>();
+            response.put("hasExistingFiles", hasFiles);
+            response.put("localPath", srmFileService.getLocalSrmPath());
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            logger.error("Error checking for existing files", e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("error", e.getMessage());
+            return ResponseEntity.status(500).body(error);
+        }
+    }
+
+    @PostMapping("/load-existing")
+    public ResponseEntity<Map<String, Object>> loadExistingFiles() {
+        try {
+            logger.info("Loading existing SRM files...");
+            Map<String, Object> result = srmFileService.loadExistingSrmFiles();
+            
+            if (Boolean.FALSE.equals(result.get("success"))) {
+                logger.warn("Failed to load existing files: {}", result.get("error"));
+                return ResponseEntity.status(404).body(result);
+            }
+            
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            logger.error("Error loading existing SRM files", e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("error", e.getMessage());
             return ResponseEntity.status(500).body(error);
         }
     }
@@ -147,6 +190,31 @@ public class SrmFileController {
             logger.error("Error getting route contents", e);
             Map<String, Object> error = new HashMap<>();
             error.put("error", e.getMessage());
+            return ResponseEntity.status(500).body(error);
+        }
+    }
+
+    @PostMapping("/validate")
+    public ResponseEntity<Map<String, Object>> validateSrmFiles() {
+        try {
+            logger.info("Starting SRM validation...");
+            Map<String, Object> result = srmValidationService.validateSrmFiles();
+            
+            if (Boolean.FALSE.equals(result.get("success"))) {
+                logger.error("Validation failed: {}", result.get("error"));
+                return ResponseEntity.status(500).body(result);
+            }
+            
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            logger.error("Error validating SRM files", e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("error", e.getMessage());
+            error.put("errorType", e.getClass().getSimpleName());
+            if (e.getCause() != null) {
+                error.put("cause", e.getCause().getMessage());
+            }
             return ResponseEntity.status(500).body(error);
         }
     }
