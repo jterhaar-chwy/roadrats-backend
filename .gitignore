@@ -1,6 +1,7 @@
 HELP.md
 .gradle
-build/
+build/*
+!build/native-libs/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
@@ -35,6 +36,9 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### Logs ###
+logs/
 
 ### Environment Files ###
 .env
