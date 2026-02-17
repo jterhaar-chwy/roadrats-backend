@@ -1,5 +1,6 @@
 package com.roadrats.demo.service;
 
+import com.roadrats.demo.model.io.EnrichedOrderResult;
 import com.roadrats.demo.model.io.OrderImportResult;
 import com.roadrats.demo.repository.io.OrderImportRepository;
 import org.slf4j.Logger;
@@ -17,6 +18,9 @@ public class OrderImportService {
 
     @Autowired
     private OrderImportRepository orderImportRepository;
+
+    @Autowired
+    private OrderAggregationService orderAggregationService;
 
     @Transactional(transactionManager = "ioTransactionManager")
     public List<OrderImportResult> getRateQueryResults() {
@@ -40,6 +44,34 @@ public class OrderImportService {
             return results;
         } catch (Exception e) {
             logger.error("Error in getRateHoldQueryResults", e);
+            throw e;
+        }
+    }
+
+    @Transactional(transactionManager = "ioTransactionManager")
+    public List<EnrichedOrderResult> getEnrichedRateQueryResults() {
+        logger.debug("Executing enriched rate query...");
+        try {
+            List<OrderImportResult> rawResults = orderImportRepository.getRateQueryResults();
+            List<EnrichedOrderResult> enriched = orderAggregationService.aggregateAndEnrich(rawResults);
+            logger.debug("Enriched rate query: {} raw rows -> {} enriched results", rawResults.size(), enriched.size());
+            return enriched;
+        } catch (Exception e) {
+            logger.error("Error in getEnrichedRateQueryResults", e);
+            throw e;
+        }
+    }
+
+    @Transactional(transactionManager = "ioTransactionManager")
+    public List<EnrichedOrderResult> getEnrichedRateHoldQueryResults() {
+        logger.debug("Executing enriched rate hold query...");
+        try {
+            List<OrderImportResult> rawResults = orderImportRepository.getRateHoldQueryResults();
+            List<EnrichedOrderResult> enriched = orderAggregationService.aggregateAndEnrich(rawResults);
+            logger.debug("Enriched rate hold query: {} raw rows -> {} enriched results", rawResults.size(), enriched.size());
+            return enriched;
+        } catch (Exception e) {
+            logger.error("Error in getEnrichedRateHoldQueryResults", e);
             throw e;
         }
     }
