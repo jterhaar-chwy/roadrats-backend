@@ -46,3 +46,6 @@ logs/
 .env.*.local
 application-local.properties
 application-dev.properties
+
+### SRM Files ###
+SRM/
