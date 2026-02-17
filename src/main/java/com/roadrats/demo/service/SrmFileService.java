@@ -46,6 +46,13 @@ public class SrmFileService {
     private String stagingFolder;
 
     /**
+     * Get the local SRM path (for external access)
+     */
+    public String getLocalSrmPath() {
+        return localSrmPath;
+    }
+
+    /**
      * Get SRM version number from the scheduled route calendar API
      */
     public String getSrmVersion() {
@@ -162,8 +169,9 @@ public class SrmFileService {
     /**
      * Copy SRM files from WMSSQL-IS StagedRouteFiles folder to localhost SRM folder and extract them
      * This is now handled by the PowerShell script, but we verify files are present
+     * @param deleteExisting If true, delete all existing files in the directory before copying new ones
      */
-    public Map<String, Object> copySrmFilesToLocal() {
+    public Map<String, Object> copySrmFilesToLocal(boolean deleteExisting) {
         Map<String, Object> result = new HashMap<>();
         try {
             logger.info("Verifying SRM files in local directory: {}", localSrmPath);
@@ -173,6 +181,27 @@ public class SrmFileService {
             if (!Files.exists(localPath)) {
                 Files.createDirectories(localPath);
                 logger.info("Created local SRM directory: {}", localSrmPath);
+            } else if (deleteExisting) {
+                // Delete all existing files in the directory before copying new ones
+                logger.info("Clearing existing files from local SRM directory: {}", localSrmPath);
+                File localDir = new File(localSrmPath);
+                File[] existingFiles = localDir.listFiles();
+                if (existingFiles != null) {
+                    int deletedCount = 0;
+                    for (File file : existingFiles) {
+                        try {
+                            if (file.isDirectory()) {
+                                deleteDirectory(file);
+                            } else {
+                                file.delete();
+                            }
+                            deletedCount++;
+                        } catch (Exception e) {
+                            logger.warn("Failed to delete file {}: {}", file.getName(), e.getMessage());
+                        }
+                    }
+                    logger.info("Deleted {} existing files from local SRM directory", deletedCount);
+                }
             }
             
             // Count files in local directory
@@ -250,6 +279,39 @@ public class SrmFileService {
             }
         } catch (Exception e) {
             logger.error("Error extracting route files", e);
+        }
+    }
+
+    /**
+     * Clear all files from the local SRM directory
+     */
+    private void clearLocalSrmDirectory() {
+        try {
+            Path localPath = Paths.get(localSrmPath);
+            if (Files.exists(localPath) && Files.isDirectory(localPath)) {
+                logger.info("Clearing existing files from local SRM directory: {}", localSrmPath);
+                File localDir = new File(localSrmPath);
+                File[] existingFiles = localDir.listFiles();
+                if (existingFiles != null) {
+                    int deletedCount = 0;
+                    for (File file : existingFiles) {
+                        try {
+                            if (file.isDirectory()) {
+                                deleteDirectory(file);
+                            } else {
+                                file.delete();
+                            }
+                            deletedCount++;
+                        } catch (Exception e) {
+                            logger.warn("Failed to delete file {}: {}", file.getName(), e.getMessage());
+                        }
+                    }
+                    logger.info("Deleted {} existing files from local SRM directory", deletedCount);
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Error clearing local SRM directory", e);
+            // Don't throw - allow process to continue even if cleanup fails
         }
     }
 
@@ -442,8 +504,69 @@ public class SrmFileService {
     }
 
     /**
+     * Check if SRM files already exist in the local directory
+     */
+    public boolean hasExistingSrmFiles() {
+        try {
+            File localDir = new File(localSrmPath);
+            if (!localDir.exists() || !localDir.isDirectory()) {
+                return false;
+            }
+            
+            // Check for CSV files ending with _CLSRoute.csv
+            File[] csvFiles = localDir.listFiles((dir, name) -> 
+                name.toLowerCase().endsWith("_clsroute.csv")
+            );
+            
+            return csvFiles != null && csvFiles.length > 0;
+        } catch (Exception e) {
+            logger.error("Error checking for existing SRM files", e);
+            return false;
+        }
+    }
+
+    /**
+     * Load existing SRM files from local directory without downloading
+     */
+    public Map<String, Object> loadExistingSrmFiles() {
+        Map<String, Object> result = new HashMap<>();
+        try {
+            logger.info("Loading existing SRM files from local directory...");
+            
+            if (!hasExistingSrmFiles()) {
+                result.put("success", false);
+                result.put("error", "No existing SRM files found in local directory");
+                return result;
+            }
+            
+            // Verify files are present locally (don't delete existing when loading existing files)
+            Map<String, Object> copyResult = copySrmFilesToLocal(false);
+            
+            result.put("version", "existing");
+            result.put("download", Map.of(
+                "success", true,
+                "message", "Using existing SRM files",
+                "skipped", true,
+                "routeCount", copyResult.getOrDefault("csvFileCount", 0)
+            ));
+            result.put("copy", copyResult);
+            result.put("success", true);
+            result.put("message", "Existing SRM files loaded successfully");
+            result.put("usedExistingFiles", true);
+            
+        } catch (Exception e) {
+            logger.error("Error loading existing SRM files", e);
+            result.put("success", false);
+            result.put("error", e.getMessage());
+        }
+        
+        return result;
+    }
+
+    /**
      * Execute the complete SRM download and copy process
      * Uses PowerShell script which handles download, copy, and extraction
+     * Always downloads, overwriting any existing files
      */
     public Map<String, Object> executeSrmDownloadProcess(String versionNumber) {
         Map<String, Object> result = new HashMap<>();
@@ -457,16 +580,20 @@ public class SrmFileService {
             }
             result.put("version", version);
             
-            // Step 2: Execute PowerShell script (handles download, copy, and extraction)
+            // Step 2: Delete existing files before downloading new ones
+            clearLocalSrmDirectory();
+            
+            // Step 3: Execute PowerShell script (handles download, copy, and extraction)
             Map<String, Object> downloadResult = downloadSrmFiles(version);
             result.put("download", downloadResult);
             
-            // Step 3: Verify files are present locally
-            Map<String, Object> copyResult = copySrmFilesToLocal();
+            // Step 4: Verify files are present locally after download
+            Map<String, Object> copyResult = copySrmFilesToLocal(false);
             result.put("copy", copyResult);
             
             result.put("success", true);
             result.put("message", "SRM download and copy process completed successfully");
+            result.put("usedExistingFiles", false);
             
         } catch (Exception e) {
             logger.error("Error in SRM download process", e);
