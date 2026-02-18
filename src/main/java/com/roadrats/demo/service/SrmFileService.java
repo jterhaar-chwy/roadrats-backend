@@ -90,16 +90,17 @@ public class SrmFileService {
     }
 
     /**
-     * Download all SRM files to WMSSQL-IS StagedRouteFiles folder via PowerShell script
-     * Calls DownloadSRMRouteData-Backend.ps1 which matches the working standalone script
+     * Download all SRM files via PSSession to WMSAPP-IS.
+     * Calls SRM-DownloadPrimer.ps1 locally, which opens a PSSession to WMSAPP-IS
+     * and invokes SRM-DownloadParallel.ps1 remotely for parallel FC downloads.
      */
     public Map<String, Object> downloadSrmFiles(String versionNumber) {
         Map<String, Object> result = new HashMap<>();
         try {
-            logger.info("Starting SRM file download for version: {} using PowerShell script", versionNumber);
+            logger.info("Starting SRM file download for version: {} using SRM-DownloadPrimer.ps1", versionNumber);
             
             // Get the PowerShell script path
-            Path scriptPath = Paths.get(scriptsPath, "DownloadSRMRouteData-Backend.ps1");
+            Path scriptPath = Paths.get(scriptsPath, "SRM-DownloadPrimer.ps1");
             if (!Files.exists(scriptPath)) {
                 throw new RuntimeException("PowerShell script not found: " + scriptPath);
             }
@@ -108,52 +109,43 @@ public class SrmFileService {
             // Use -File parameter for better script execution
             String scriptPathStr = scriptPath.toAbsolutePath().toString();
             String scriptCommand = String.format(
-                "-File \"%s\" -VersionNumber \"%s\" -LocalDestinationPath \"%s\"",
+                "-File \"%s\" -VersionNumber \"%s\" -DestinationPath \"%s\"",
                 scriptPathStr,
                 versionNumber,
                 localSrmPath
             );
             
             // Execute PowerShell script
+            logger.info("Executing: powershell.exe {}", scriptCommand);
             String output = executePowerShellScript(scriptCommand);
-            logger.info("PowerShell script output: {}", output);
+            logger.info("PowerShell script raw output:\n{}", output);
             
             // Parse JSON output from script
-            try {
-                // Find JSON in output (may have other text before/after)
-                int jsonStart = output.indexOf("{");
-                int jsonEnd = output.lastIndexOf("}") + 1;
-                if (jsonStart >= 0 && jsonEnd > jsonStart) {
-                    String jsonOutput = output.substring(jsonStart, jsonEnd);
-                    ObjectMapper mapper = new ObjectMapper();
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> scriptResult = mapper.readValue(jsonOutput, Map.class);
-                    
-                    if (Boolean.TRUE.equals(scriptResult.get("success"))) {
-                        result.putAll(scriptResult);
-                        result.put("message", "SRM files downloaded successfully");
-                    } else {
-                        throw new RuntimeException("PowerShell script failed: " + scriptResult.get("error"));
-                    }
+            if (output == null || output.trim().isEmpty()) {
+                throw new RuntimeException("PowerShell script returned no output. Script may not have executed. Path: " + scriptPathStr);
+            }
+            
+            int jsonStart = output.indexOf("{");
+            int jsonEnd = output.lastIndexOf("}") + 1;
+            if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                String jsonOutput = output.substring(jsonStart, jsonEnd);
+                logger.info("Parsed JSON from script: {}", jsonOutput);
+                ObjectMapper mapper = new ObjectMapper();
+                @SuppressWarnings("unchecked")
+                Map<String, Object> scriptResult = mapper.readValue(jsonOutput, Map.class);
+                
+                if (Boolean.TRUE.equals(scriptResult.get("success"))) {
+                    result.putAll(scriptResult);
+                    result.put("message", "SRM files downloaded successfully");
                 } else {
-                    // If no JSON found, check for error indicators
-                    if (output.toLowerCase().contains("error") || output.toLowerCase().contains("failed")) {
-                        throw new RuntimeException("PowerShell script may have failed. Output: " + output);
-                    }
-                    // Assume success if no errors
-                    result.put("success", true);
-                    result.put("version", versionNumber);
-                    result.put("message", "SRM files downloaded");
+                    String scriptError = scriptResult.getOrDefault("error", "unknown error").toString();
+                    String scriptDetails = scriptResult.getOrDefault("errorDetails", "").toString();
+                    throw new RuntimeException("Script failed: " + scriptError + 
+                        (scriptDetails.isEmpty() ? "" : " | Details: " + scriptDetails));
                 }
-            } catch (Exception e) {
-                logger.warn("Could not parse JSON output: {}", e.getMessage());
-                // Check if it's a JSON parsing error or actual failure
-                if (output.toLowerCase().contains("error") || output.toLowerCase().contains("failed")) {
-                    throw new RuntimeException("PowerShell script failed. Output: " + output, e);
-                }
-                result.put("success", true);
-                result.put("version", versionNumber);
-                result.put("message", "SRM files downloaded (unable to parse detailed output)");
+            } else {
+                // No JSON found — treat as failure and include raw output for debugging
+                throw new RuntimeException("No JSON in script output. Raw output: " + output);
             }
             
         } catch (Exception e) {
