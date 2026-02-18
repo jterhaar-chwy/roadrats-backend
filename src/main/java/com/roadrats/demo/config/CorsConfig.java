@@ -14,8 +14,8 @@ public class CorsConfig {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         CorsConfiguration config = new CorsConfiguration();
         
-        // Allow requests from Next.js frontend
-        config.addAllowedOrigin("http://localhost:3000");
+        // Allow requests from any origin (local dev + remote access)
+        config.addAllowedOriginPattern("*");
         config.addAllowedMethod("*");
         config.addAllowedHeader("*");
         config.setAllowCredentials(true);
