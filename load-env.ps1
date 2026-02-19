@@ -1,7 +1,7 @@
 # Road Rats Backend - Environment Setup
 # Uses Windows Integrated Authentication (no username/password needed)
 
-$env:CLS_DB_URL="jdbc:sqlserver://wmssql-cls:1433;databaseName=DMSServer_320;encrypt=true;trustServerCertificate=true;integratedSecurity=true"
+$env:CLS_DB_URL="jdbc:sqlserver://wmssql-cls:1433;databaseName=DMSServer;encrypt=true;trustServerCertificate=true;integratedSecurity=true"
 $env:IO_DB_URL="jdbc:sqlserver://wmssql-io:1433;databaseName=AAD_IMPORT_ORDER;encrypt=true;trustServerCertificate=true;integratedSecurity=true"
 
 # Jira / Release Manager Configuration

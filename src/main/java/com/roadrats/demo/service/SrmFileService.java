@@ -15,6 +15,10 @@ import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
@@ -50,6 +54,140 @@ public class SrmFileService {
      */
     public String getLocalSrmPath() {
         return localSrmPath;
+    }
+
+    /**
+     * Get route calendar versions from the SRM download history API.
+     * Calls /v1/srm/ui/download/history/version/all — returns the top 20 versions.
+     * Uses Java native HttpClient to avoid PowerShell escaping issues with Bearer tokens.
+     */
+    public Map<String, Object> getScheduledRouteCalendarVersion() {
+        Map<String, Object> result = new HashMap<>();
+        try {
+            logger.info("Fetching route calendar versions from SRM API...");
+
+            Map<String, String> srmInfo = getSrmWebServiceInfo();
+            String token = srmInfo.get("token");
+            String versionApiUrl = "https://srm-api.use1.scff.prd.aws.chewy.cloud/v1/srm/ui/download/history/version/all";
+
+            logger.debug("Calling SRM version API: {}", versionApiUrl);
+
+            // Force HTTP/1.1 — some API gateways 301 on HTTP/2
+            // Manual redirect following to re-attach Authorization header
+            HttpClient client = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(java.time.Duration.ofSeconds(30))
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build();
+
+            String currentUrl = versionApiUrl;
+            HttpResponse<String> response = null;
+            int maxRedirects = 5;
+
+            for (int redirectCount = 0; redirectCount <= maxRedirects; redirectCount++) {
+                logger.info("SRM version API request #{} -> {}", redirectCount, currentUrl);
+
+                HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(currentUrl))
+                    .header("Authorization", "Bearer " + token)
+                    .header("Accept", "*/*")
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT; Windows NT 10.0) PowerShell/7.0")
+                    .GET()
+                    .timeout(java.time.Duration.ofSeconds(30))
+                    .build();
+
+                response = client.send(request, HttpResponse.BodyHandlers.ofString());
+                
+                logger.info("SRM API response: status={}, headers={}", 
+                    response.statusCode(), response.headers().map());
+
+                if (response.statusCode() == 301 || response.statusCode() == 302 || response.statusCode() == 307 || response.statusCode() == 308) {
+                    String location = response.headers().firstValue("location").orElse(
+                        response.headers().firstValue("Location").orElse(null)
+                    );
+                    if (location == null || location.isEmpty()) {
+                        throw new RuntimeException("SRM API returned HTTP " + response.statusCode() 
+                            + " but no Location header. All headers: " + response.headers().map());
+                    }
+                    // Handle relative redirects
+                    if (location.startsWith("/")) {
+                        URI original = URI.create(currentUrl);
+                        location = original.getScheme() + "://" + original.getHost() + location;
+                    }
+                    logger.info("Following redirect {} -> {}", response.statusCode(), location);
+                    currentUrl = location;
+                    continue;
+                }
+                break;
+            }
+
+            if (response.statusCode() != 200) {
+                throw new RuntimeException("SRM API returned HTTP " + response.statusCode() + ": " + response.body());
+            }
+
+            String rawJson = response.body();
+            if (rawJson == null || rawJson.trim().isEmpty()) {
+                throw new RuntimeException("Empty response from SRM version API");
+            }
+
+            ObjectMapper mapper = new ObjectMapper();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = mapper.readValue(rawJson.trim(), Map.class);
+
+            // data is an array of version objects, each with { id, type, attributes }
+            Object dataObj = parsed.get("data");
+            if (dataObj instanceof java.util.List) {
+                @SuppressWarnings("unchecked")
+                java.util.List<Map<String, Object>> dataList = (java.util.List<Map<String, Object>>) dataObj;
+
+                // Return top 20 versions
+                int limit = Math.min(dataList.size(), 20);
+                java.util.List<Map<String, Object>> versions = new java.util.ArrayList<>();
+
+                for (int i = 0; i < limit; i++) {
+                    Map<String, Object> item = dataList.get(i);
+                    Map<String, Object> version = new HashMap<>();
+                    version.put("id", item.get("id"));
+                    version.put("type", item.get("type"));
+
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> attributes = (Map<String, Object>) item.get("attributes");
+                    if (attributes != null) {
+                        version.put("routeCalendarVersionId", attributes.get("routeCalendarVersionId"));
+                        version.put("status", attributes.get("status"));
+                        version.put("uploadTime", attributes.get("uploadTime"));
+                        version.put("uploadUser", attributes.get("uploadUser"));
+                        version.put("scheduledTime", attributes.get("scheduledTime"));
+                        version.put("scheduleUser", attributes.get("scheduleUser"));
+                        version.put("locked", attributes.get("locked"));
+                    }
+                    versions.add(version);
+                }
+
+                result.put("versions", versions);
+                result.put("totalCount", dataList.size());
+
+                // Also set the first SCHEDULED or most recent version as scheduledVersion
+                for (Map<String, Object> v : versions) {
+                    if ("SCHEDULED".equals(v.get("status"))) {
+                        result.put("scheduledVersion", String.valueOf(v.get("id")));
+                        break;
+                    }
+                }
+                if (!result.containsKey("scheduledVersion") && !versions.isEmpty()) {
+                    result.put("scheduledVersion", String.valueOf(versions.get(0).get("id")));
+                }
+            }
+
+            result.put("success", true);
+            logger.info("Retrieved {} versions, scheduled version: {}", 
+                result.get("totalCount"), result.get("scheduledVersion"));
+        } catch (Exception e) {
+            logger.error("Error fetching route calendar versions", e);
+            result.put("success", false);
+            result.put("error", e.getMessage());
+        }
+        return result;
     }
 
     /**

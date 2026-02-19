@@ -25,6 +25,24 @@ public class SrmFileController {
     @Autowired
     private SrmValidationService srmValidationService;
 
+    @GetMapping("/scheduled-version")
+    public ResponseEntity<Map<String, Object>> getScheduledVersion() {
+        try {
+            logger.info("Getting scheduled route calendar version...");
+            Map<String, Object> result = srmFileService.getScheduledRouteCalendarVersion();
+            if (Boolean.FALSE.equals(result.get("success"))) {
+                return ResponseEntity.status(500).body(result);
+            }
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            logger.error("Error getting scheduled version", e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("error", e.getMessage());
+            return ResponseEntity.status(500).body(error);
+        }
+    }
+
     @GetMapping("/version")
     public ResponseEntity<Map<String, Object>> getSrmVersion() {
         try {
