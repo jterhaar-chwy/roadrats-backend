@@ -18,6 +18,8 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.Comparator;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -147,13 +149,50 @@ public class SrmValidationService {
                 return routeA.compareToIgnoreCase(routeB);
             });
 
-            // Step 6: Build result
+            // Step 6: Build delta-comparable rollup (grouped by shipper + route + changeType)
+            Map<String, Map<String, Object>> deltaComparableMap = new LinkedHashMap<>();
+            for (Map<String, Object> summary : allSummaries) {
+                String shipper = (String) summary.getOrDefault("shipper", "");
+                String route = (String) summary.getOrDefault("route", "");
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> diffs = (List<Map<String, Object>>) summary.get("differences");
+                if (diffs == null) continue;
+
+                // Count zips per changeType within this shipper+route
+                Map<String, Integer> changeTypeCounts = new HashMap<>();
+                for (Map<String, Object> diff : diffs) {
+                    String ct = (String) diff.getOrDefault("changeType", "UNKNOWN");
+                    changeTypeCounts.merge(ct, 1, Integer::sum);
+                }
+
+                for (Map.Entry<String, Integer> ctEntry : changeTypeCounts.entrySet()) {
+                    String compositeKey = shipper + "|" + route + "|" + ctEntry.getKey();
+                    Map<String, Object> existing = deltaComparableMap.get(compositeKey);
+                    if (existing != null) {
+                        existing.put("numZips", (Integer) existing.get("numZips") + ctEntry.getValue());
+                    } else {
+                        Map<String, Object> entry = new LinkedHashMap<>();
+                        entry.put("fulfillmentCenter", shipper);
+                        entry.put("routeName", route);
+                        entry.put("changeType", ctEntry.getKey());
+                        entry.put("numZips", ctEntry.getValue());
+                        deltaComparableMap.put(compositeKey, entry);
+                    }
+                }
+            }
+            List<Map<String, Object>> deltaComparable = new ArrayList<>(deltaComparableMap.values());
+            deltaComparable.sort(Comparator.comparing((Map<String, Object> m) -> (String) m.getOrDefault("fulfillmentCenter", ""))
+                .thenComparing(m -> (String) m.getOrDefault("routeName", ""))
+                .thenComparing(m -> (String) m.getOrDefault("changeType", "")));
+
+            // Step 7: Build result
             int totalPostalCodesChanged = allSummaries.stream()
                 .mapToInt(s -> (Integer) s.getOrDefault("postalCodeCount", 0))
                 .sum();
             
             result.put("success", true);
             result.put("validationResults", allSummaries);
+            result.put("deltaComparable", deltaComparable);
             result.put("summary", Map.of(
                 "totalRoutesAffected", allSummaries.size(),
                 "totalPostalCodesChanged", totalPostalCodesChanged,

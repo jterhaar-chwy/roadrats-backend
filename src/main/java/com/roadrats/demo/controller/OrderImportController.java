@@ -23,7 +23,6 @@ import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/io")
-@CrossOrigin(origins = "http://localhost:3000")
 public class OrderImportController {
 
     private static final Logger logger = LoggerFactory.getLogger(OrderImportController.class);

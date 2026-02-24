@@ -20,6 +20,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.*;
+import java.util.LinkedHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -184,6 +185,124 @@ public class SrmFileService {
                 result.get("totalCount"), result.get("scheduledVersion"));
         } catch (Exception e) {
             logger.error("Error fetching route calendar versions", e);
+            result.put("success", false);
+            result.put("error", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * Get delta-summary for a given route calendar version from the SRM API.
+     * Calls /v1/srm/ui/delta-summary/getTables?versionId={versionId}
+     */
+    public Map<String, Object> getDeltaSummary(int versionId) {
+        Map<String, Object> result = new HashMap<>();
+        try {
+            logger.info("Fetching delta summary for version {}...", versionId);
+
+            Map<String, String> srmInfo = getSrmWebServiceInfo();
+            String token = srmInfo.get("token");
+            String apiUrl = "https://srm-api.use1.scff.prd.aws.chewy.cloud/v1/srm/ui/delta-summary/getTables?versionId=" + versionId;
+
+            HttpClient client = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(java.time.Duration.ofSeconds(30))
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build();
+
+            String currentUrl = apiUrl;
+            HttpResponse<String> response = null;
+            int maxRedirects = 5;
+
+            for (int redirectCount = 0; redirectCount <= maxRedirects; redirectCount++) {
+                logger.info("Delta summary API request #{} -> {}", redirectCount, currentUrl);
+
+                HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(currentUrl))
+                    .header("Authorization", "Bearer " + token)
+                    .header("Accept", "*/*")
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT; Windows NT 10.0) PowerShell/7.0")
+                    .GET()
+                    .timeout(java.time.Duration.ofSeconds(30))
+                    .build();
+
+                response = client.send(request, HttpResponse.BodyHandlers.ofString());
+                logger.info("Delta summary API response: status={}", response.statusCode());
+
+                if (response.statusCode() == 301 || response.statusCode() == 302 || response.statusCode() == 307 || response.statusCode() == 308) {
+                    String location = response.headers().firstValue("location").orElse(
+                        response.headers().firstValue("Location").orElse(null)
+                    );
+                    if (location == null || location.isEmpty()) {
+                        throw new RuntimeException("SRM API returned HTTP " + response.statusCode() + " with no Location header");
+                    }
+                    if (location.startsWith("/")) {
+                        URI original = URI.create(currentUrl);
+                        location = original.getScheme() + "://" + original.getHost() + location;
+                    }
+                    logger.info("Following redirect {} -> {}", response.statusCode(), location);
+                    currentUrl = location;
+                    continue;
+                }
+                break;
+            }
+
+            if (response.statusCode() != 200) {
+                throw new RuntimeException("SRM API returned HTTP " + response.statusCode() + ": " + response.body());
+            }
+
+            String rawJson = response.body();
+            if (rawJson == null || rawJson.trim().isEmpty()) {
+                throw new RuntimeException("Empty response from delta summary API");
+            }
+
+            ObjectMapper mapper = new ObjectMapper();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = mapper.readValue(rawJson.trim(), Map.class);
+
+            // Build a summary from the raw delta data
+            Map<String, Object> summary = new LinkedHashMap<>();
+            int totalChanges = 0;
+            int totalZips = 0;
+            Map<String, Integer> changeTypeCounts = new LinkedHashMap<>();
+            Map<String, Integer> fcCounts = new LinkedHashMap<>();
+
+            for (Map.Entry<String, Object> entry : parsed.entrySet()) {
+                if (entry.getValue() instanceof List) {
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> changes = (List<Map<String, Object>>) entry.getValue();
+                    totalChanges += changes.size();
+
+                    for (Map<String, Object> change : changes) {
+                        String changeType = (String) change.getOrDefault("changeType", "UNKNOWN");
+                        changeTypeCounts.merge(changeType, 1, Integer::sum);
+
+                        String fc = (String) change.getOrDefault("fulfillmentCenter", "");
+                        if (fc != null && !fc.isEmpty()) {
+                            fcCounts.merge(fc, 1, Integer::sum);
+                        }
+
+                        Object numZipsObj = change.get("numZips");
+                        if (numZipsObj instanceof Number) {
+                            totalZips += ((Number) numZipsObj).intValue();
+                        }
+                    }
+                }
+            }
+
+            summary.put("totalChanges", totalChanges);
+            summary.put("totalZipsAffected", totalZips);
+            summary.put("changeTypeCounts", changeTypeCounts);
+            summary.put("fulfillmentCenterCounts", fcCounts);
+
+            result.put("success", true);
+            result.put("versionId", versionId);
+            result.put("raw", parsed);
+            result.put("summary", summary);
+            logger.info("Delta summary: {} changes, {} zips affected for version {}", totalChanges, totalZips, versionId);
+
+        } catch (Exception e) {
+            logger.error("Error fetching delta summary for version {}", versionId, e);
             result.put("success", false);
             result.put("error", e.getMessage());
         }

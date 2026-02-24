@@ -14,7 +14,6 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/srm")
-@CrossOrigin(origins = "http://localhost:3000")
 public class SrmFileController {
 
     private static final Logger logger = LoggerFactory.getLogger(SrmFileController.class);
@@ -36,6 +35,24 @@ public class SrmFileController {
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             logger.error("Error getting scheduled version", e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("error", e.getMessage());
+            return ResponseEntity.status(500).body(error);
+        }
+    }
+
+    @GetMapping("/delta-summary")
+    public ResponseEntity<Map<String, Object>> getDeltaSummary(@RequestParam int versionId) {
+        try {
+            logger.info("Getting delta summary for version {}...", versionId);
+            Map<String, Object> result = srmFileService.getDeltaSummary(versionId);
+            if (Boolean.FALSE.equals(result.get("success"))) {
+                return ResponseEntity.status(500).body(result);
+            }
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            logger.error("Error getting delta summary", e);
             Map<String, Object> error = new HashMap<>();
             error.put("success", false);
             error.put("error", e.getMessage());

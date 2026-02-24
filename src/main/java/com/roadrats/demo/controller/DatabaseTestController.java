@@ -15,7 +15,6 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/database")
-@CrossOrigin(origins = "http://localhost:3000")
 public class DatabaseTestController {
 
     private static final Logger logger = LoggerFactory.getLogger(DatabaseTestController.class);

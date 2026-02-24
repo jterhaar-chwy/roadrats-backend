@@ -13,7 +13,6 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/cls")
-@CrossOrigin(origins = "http://localhost:3000")
 public class SaturdayDeliveryController {
 
     private static final Logger logger = LoggerFactory.getLogger(SaturdayDeliveryController.class);

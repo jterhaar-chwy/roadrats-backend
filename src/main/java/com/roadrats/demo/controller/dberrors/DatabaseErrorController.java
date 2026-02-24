@@ -15,7 +15,6 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/database-errors")
-@CrossOrigin(origins = "http://localhost:3000")
 public class DatabaseErrorController {
 
     private static final Logger logger = LoggerFactory.getLogger(DatabaseErrorController.class);

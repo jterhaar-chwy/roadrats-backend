@@ -4,6 +4,8 @@ import com.roadrats.demo.config.ReleaseManagerConfig;
 import com.roadrats.demo.config.ReleaseManagerConfig.PresetFilter;
 import com.roadrats.demo.model.releasemanager.DeploymentPlan;
 import com.roadrats.demo.model.releasemanager.JiraTicket;
+import com.roadrats.demo.service.releasemanager.DeploymentFolderService;
+import com.roadrats.demo.service.releasemanager.GitHubActionsService;
 import com.roadrats.demo.service.releasemanager.JiraService;
 import com.roadrats.demo.service.releasemanager.ReleaseManagerService;
 import org.slf4j.Logger;
@@ -26,14 +28,20 @@ public class ReleaseManagerController {
     private final ReleaseManagerService releaseManagerService;
     private final JiraService jiraService;
     private final ReleaseManagerConfig config;
+    private final DeploymentFolderService deploymentFolderService;
+    private final GitHubActionsService gitHubActionsService;
 
     public ReleaseManagerController(
             ReleaseManagerService releaseManagerService,
             JiraService jiraService,
-            ReleaseManagerConfig config) {
+            ReleaseManagerConfig config,
+            DeploymentFolderService deploymentFolderService,
+            GitHubActionsService gitHubActionsService) {
         this.releaseManagerService = releaseManagerService;
         this.jiraService = jiraService;
         this.config = config;
+        this.deploymentFolderService = deploymentFolderService;
+        this.gitHubActionsService = gitHubActionsService;
     }
 
     /**
@@ -241,6 +249,161 @@ public class ReleaseManagerController {
             @RequestParam(value = "count", defaultValue = "4") int count) {
         Map<String, Object> dates = config.getUpcomingDeployments(Math.min(count, 12));
         return ResponseEntity.ok(dates);
+    }
+
+    // ======================================================================
+    // Deployment Folder Browser
+    // ======================================================================
+
+    /**
+     * GET /api/release-manager/deployments/years
+     * List available year folders under the deployments root.
+     */
+    @GetMapping("/deployments/years")
+    public ResponseEntity<?> getDeploymentYears() {
+        try {
+            return ResponseEntity.ok(deploymentFolderService.listYears());
+        } catch (IllegalStateException e) {
+            return configError(e);
+        } catch (Exception e) {
+            return serverError("Failed to list deployment years", "", e);
+        }
+    }
+
+    /**
+     * GET /api/release-manager/deployments/months?year=2026
+     * List month folders under a year.
+     */
+    @GetMapping("/deployments/months")
+    public ResponseEntity<?> getDeploymentMonths(@RequestParam("year") String year) {
+        try {
+            return ResponseEntity.ok(deploymentFolderService.listMonths(year));
+        } catch (Exception e) {
+            return serverError("Failed to list months", year, e);
+        }
+    }
+
+    /**
+     * GET /api/release-manager/deployments/releases?year=2026&month=02-FEB
+     * List release/CHG folders under a month.
+     */
+    @GetMapping("/deployments/releases")
+    public ResponseEntity<?> getDeploymentReleases(
+            @RequestParam("year") String year,
+            @RequestParam("month") String month) {
+        try {
+            return ResponseEntity.ok(deploymentFolderService.listReleases(year, month));
+        } catch (Exception e) {
+            return serverError("Failed to list releases", year + "/" + month, e);
+        }
+    }
+
+    /**
+     * GET /api/release-manager/deployments/contents?path=2026/02-FEB/release-03-05
+     * Get folder contents including CHG summaries.
+     */
+    @GetMapping("/deployments/contents")
+    public ResponseEntity<?> getFolderContents(@RequestParam("path") String path) {
+        try {
+            return ResponseEntity.ok(deploymentFolderService.getFolderContents(path));
+        } catch (Exception e) {
+            return serverError("Failed to read folder contents", path, e);
+        }
+    }
+
+    /**
+     * GET /api/release-manager/deployments/file?path=2026/02-FEB/release-03-05/CHG.../somefile.log
+     * Read a specific file's content (text files, size-limited).
+     */
+    @GetMapping("/deployments/file")
+    public ResponseEntity<?> readDeploymentFile(@RequestParam("path") String path) {
+        try {
+            return ResponseEntity.ok(deploymentFolderService.readFileContent(path));
+        } catch (Exception e) {
+            return serverError("Failed to read file", path, e);
+        }
+    }
+
+    // ======================================================================
+    // GitHub Actions Integration
+    // ======================================================================
+
+    /**
+     * GET /api/release-manager/actions/runs?workflow=...&limit=20
+     * List recent GitHub Actions workflow runs.
+     */
+    @GetMapping("/actions/runs")
+    public ResponseEntity<?> getActionRuns(
+            @RequestParam(value = "workflow", required = false) String workflow,
+            @RequestParam(value = "limit", defaultValue = "20") int limit) {
+        try {
+            String wf = (workflow != null && !workflow.isEmpty()) ? workflow : config.getGithubWorkflow();
+            return ResponseEntity.ok(gitHubActionsService.listRuns(wf, limit));
+        } catch (IllegalStateException e) {
+            return configError(e);
+        } catch (Exception e) {
+            return serverError("Failed to list GitHub Actions runs", workflow, e);
+        }
+    }
+
+    /**
+     * GET /api/release-manager/actions/run/{runId}
+     * Get details for a specific workflow run including jobs.
+     */
+    @GetMapping("/actions/run/{runId}")
+    public ResponseEntity<?> getActionRunDetails(@PathVariable("runId") long runId) {
+        try {
+            return ResponseEntity.ok(gitHubActionsService.getRunDetails(runId));
+        } catch (Exception e) {
+            return serverError("Failed to get run details", String.valueOf(runId), e);
+        }
+    }
+
+    /**
+     * GET /api/release-manager/actions/run/{runId}/jobs
+     * Get jobs for a specific workflow run.
+     */
+    @GetMapping("/actions/run/{runId}/jobs")
+    public ResponseEntity<?> getActionRunJobs(@PathVariable("runId") long runId) {
+        try {
+            return ResponseEntity.ok(gitHubActionsService.getRunJobs(runId));
+        } catch (Exception e) {
+            return serverError("Failed to get run jobs", String.valueOf(runId), e);
+        }
+    }
+
+    /**
+     * GET /api/release-manager/actions/workflows
+     * List available workflows in the configured repo.
+     */
+    @GetMapping("/actions/workflows")
+    public ResponseEntity<?> getWorkflows() {
+        try {
+            return ResponseEntity.ok(gitHubActionsService.listWorkflows());
+        } catch (IllegalStateException e) {
+            return configError(e);
+        } catch (Exception e) {
+            return serverError("Failed to list workflows", "", e);
+        }
+    }
+
+    /**
+     * POST /api/release-manager/actions/trigger
+     * Trigger a workflow dispatch.
+     * Body: { "workflow": "build-stage-deploy-package-by-CHG.yaml", "inputs": { "CHGNumber": "CHG...", "Environment": "prod" } }
+     */
+    @PostMapping("/actions/trigger")
+    public ResponseEntity<?> triggerWorkflow(@RequestBody Map<String, Object> body) {
+        try {
+            String workflow = (String) body.getOrDefault("workflow", config.getGithubWorkflow());
+            @SuppressWarnings("unchecked")
+            Map<String, String> inputs = (Map<String, String>) body.getOrDefault("inputs", Map.of());
+            return ResponseEntity.ok(gitHubActionsService.triggerWorkflow(workflow, inputs));
+        } catch (IllegalStateException e) {
+            return configError(e);
+        } catch (Exception e) {
+            return serverError("Failed to trigger workflow", "", e);
+        }
     }
 
     // ======================================================================

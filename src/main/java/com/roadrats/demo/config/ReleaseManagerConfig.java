@@ -31,6 +31,12 @@ public class ReleaseManagerConfig {
     @Value("${roadrats.releases.deployments-path:#{null}}")
     private String deploymentsPath;
 
+    @Value("${roadrats.releases.github-repo:#{null}}")
+    private String githubRepo;
+
+    @Value("${roadrats.releases.github-workflow:build-stage-deploy-package-by-CHG.yaml}")
+    private String githubWorkflow;
+
     // Baseline deployment Thursday for the bi-weekly cycle calculation
     // Matches: $BaselineDeployment = [datetime]"2026-02-19" in standard-release.ps1
     @Value("${roadrats.jira.baseline-deployment:2026-02-19}")
@@ -42,6 +48,8 @@ public class ReleaseManagerConfig {
     public int getMaxResults() { return maxResults; }
     public String getLogsPath() { return logsPath; }
     public String getDeploymentsPath() { return deploymentsPath; }
+    public String getGithubRepo() { return githubRepo; }
+    public String getGithubWorkflow() { return githubWorkflow; }
 
     // -----------------------------------------------------------------
     // JQL Builders
@@ -139,6 +147,46 @@ public class ReleaseManagerConfig {
             "AND resolution in (EMPTY, Done) " +
             "AND fixVersion in (EMPTY, unreleasedVersions()) " +
             "AND status in (\"Review\")"
+        ));
+
+        presets.put("complete", new PresetFilter(
+            "Complete",
+            "Issues in Complete status ready for release",
+            "project in (WMSRX, WMS) AND (labels not in (WMS_DONOTCOMPILE) OR labels in (EMPTY)) " +
+            "AND issuetype not in (Epic, subTaskIssueTypes(), Task) " +
+            "AND resolution in (EMPTY, Done) " +
+            "AND fixVersion in (EMPTY, unreleasedVersions()) " +
+            "AND status in (\"Complete\")"
+        ));
+
+        presets.put("blocked", new PresetFilter(
+            "Blocked",
+            "Issues currently in Blocked status",
+            "project in (WMSRX, WMS) " +
+            "AND issuetype not in (Epic, subTaskIssueTypes()) " +
+            "AND resolution = EMPTY " +
+            "AND status in (\"Blocked\", \"Impediment\")"
+        ));
+
+        presets.put("no-fixversion", new PresetFilter(
+            "Work with No Fix Version",
+            "Done/Complete/UAT issues missing a fix version",
+            "project in (\"WMS\", \"WMS Rx\") " +
+            "AND issuetype not in (subTaskIssueTypes(), Epic) " +
+            "AND status in (\"Integration Testing\", \"Stakeholder Review\", UAT, Done, Complete) " +
+            "AND (Resolution is EMPTY OR resolution = Done) " +
+            "AND (fixversion is EMPTY) " +
+            "ORDER BY parent ASC, fixVersion, status"
+        ));
+
+        presets.put("downtime", new PresetFilter(
+            "Downtime Required",
+            "Issues with downtime required flag set",
+            "project in (WMSRX, WMS) " +
+            "AND issuetype not in (Epic, subTaskIssueTypes()) " +
+            "AND resolution = EMPTY " +
+            "AND 'Downtime Required' is not EMPTY " +
+            "AND fixVersion in (unreleasedVersions())"
         ));
 
         return presets;
