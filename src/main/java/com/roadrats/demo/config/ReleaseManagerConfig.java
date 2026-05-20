@@ -7,8 +7,11 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Configuration
 public class ReleaseManagerConfig {
@@ -37,6 +40,13 @@ public class ReleaseManagerConfig {
     @Value("${roadrats.releases.github-workflow:build-stage-deploy-package-by-CHG.yaml}")
     private String githubWorkflow;
 
+    /**
+     * Comma-separated workflow file names for the Actions panel when no ?workflow= is passed.
+     * Runs are merged, deduped, and sorted by time (newest first).
+     */
+    @Value("${roadrats.releases.github-workflows:build-stage-deploy-package-by-CHG.yaml,scheduled-build-stage-deploy-package-by-CHG.yml,scheduled-ci-build-stage.yml,integrity-sniffer.yml}")
+    private String githubWorkflowsCsv;
+
     // Baseline deployment Thursday for the bi-weekly cycle calculation
     // Matches: $BaselineDeployment = [datetime]"2026-02-19" in standard-release.ps1
     @Value("${roadrats.jira.baseline-deployment:2026-02-19}")
@@ -50,6 +60,21 @@ public class ReleaseManagerConfig {
     public String getDeploymentsPath() { return deploymentsPath; }
     public String getGithubRepo() { return githubRepo; }
     public String getGithubWorkflow() { return githubWorkflow; }
+
+    /**
+     * Workflows used to populate the default Actions runs list.
+     */
+    public List<String> getGithubActionsWorkflows() {
+        if (githubWorkflowsCsv == null || githubWorkflowsCsv.isBlank()) {
+            return githubWorkflow != null && !githubWorkflow.isBlank()
+                ? List.of(githubWorkflow.trim())
+                : List.of();
+        }
+        return Arrays.stream(githubWorkflowsCsv.split(","))
+            .map(String::trim)
+            .filter(s -> !s.isEmpty())
+            .collect(Collectors.toList());
+    }
 
     // -----------------------------------------------------------------
     // JQL Builders

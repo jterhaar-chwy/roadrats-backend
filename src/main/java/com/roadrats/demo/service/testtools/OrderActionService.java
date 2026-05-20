@@ -1,6 +1,6 @@
 package com.roadrats.demo.service.testtools;
 
-import com.roadrats.demo.config.TestToolsConfig;
+import com.roadrats.demo.config.Wms360Config;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -13,9 +13,9 @@ public class OrderActionService {
 
     private static final Logger logger = LoggerFactory.getLogger(OrderActionService.class);
 
-    private final TestToolsConfig config;
+    private final Wms360Config config;
 
-    public OrderActionService(TestToolsConfig config) {
+    public OrderActionService(Wms360Config config) {
         this.config = config;
     }
 
@@ -23,10 +23,10 @@ public class OrderActionService {
      * Quick lookup of pick_container + pick_detail for an order on AAD.
      * Resolves order from container_id, order_number, or oms_order_number.
      */
-    public Map<String, Object> resolveOrder(String searchType, String searchValue, String warehouseId) {
+    public Map<String, Object> resolveOrder(String searchType, String searchValue, String warehouseId, String env) {
         Map<String, Object> result = new LinkedHashMap<>();
-        String jdbcUrl = config.buildAadJdbcUrl();
-        logger.info("resolveOrder: type={}, value={}, wh={}, url={}", searchType, searchValue, warehouseId, jdbcUrl);
+        String jdbcUrl = config.buildAadJdbcUrl(env);
+        logger.info("resolveOrder: type={}, value={}, wh={}, env={}, url={}", searchType, searchValue, warehouseId, env, jdbcUrl);
 
         try {
             Class.forName(config.getDriverClassName());
@@ -104,7 +104,8 @@ public class OrderActionService {
             result.put("orderNumber", orderNumber);
             result.put("containerId", containerId);
             result.put("warehouseId", resolvedWhId);
-            result.put("connection", config.getAadServer() + " / " + config.getAadDatabase());
+            result.put("connection", config.getAadServer(env) + " / " + config.getAadDatabase(env));
+            result.put("environment", env);
 
             // Step 3: Fetch pick_container rows
             if (orderNumber != null) {
@@ -161,15 +162,22 @@ public class OrderActionService {
      */
     public Map<String, Object> setupOrderData(String warehouseId, String orderNumber,
                                                String setupType, String containerId,
-                                               String itemOverride, Integer quantityOverride) {
+                                               String itemOverride, Integer quantityOverride, String env) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("warehouseId", warehouseId);
         result.put("orderNumber", orderNumber);
         result.put("setupType", setupType);
+        result.put("environment", env);
         if (containerId != null && !containerId.isEmpty()) result.put("containerId", containerId);
         result.put("executedAt", new java.util.Date().toString());
 
-        String jdbcUrl = config.buildAadJdbcUrl();
+        if (Wms360Config.isProd(env)) {
+            result.put("success", false);
+            result.put("error", "Setup order data is not allowed in production environment");
+            return result;
+        }
+
+        String jdbcUrl = config.buildAadJdbcUrl(env);
         logger.info("setupOrderData: wh={}, order={}, type={}, container={}, itemOverride={}, qtyOverride={}",
             warehouseId, orderNumber, setupType, containerId, itemOverride, quantityOverride);
 
@@ -356,14 +364,21 @@ public class OrderActionService {
      * Send fulfillment status event for a container (Wizmo events).
      * Calls usp_pick_container_fulfillment_status_update with the given status code.
      */
-    public Map<String, Object> sendFulfillmentEvent(String warehouseId, String containerId, String statusCode) {
+    public Map<String, Object> sendFulfillmentEvent(String warehouseId, String containerId, String statusCode, String env) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("warehouseId", warehouseId);
         result.put("containerId", containerId);
         result.put("statusCode", statusCode);
+        result.put("environment", env);
         result.put("executedAt", new java.util.Date().toString());
 
-        String jdbcUrl = config.buildAadJdbcUrl();
+        if (Wms360Config.isProd(env)) {
+            result.put("success", false);
+            result.put("error", "Fulfillment events are not allowed in production environment");
+            return result;
+        }
+
+        String jdbcUrl = config.buildAadJdbcUrl(env);
         logger.info("sendFulfillmentEvent: wh={}, container={}, status={}", warehouseId, containerId, statusCode);
 
         try {

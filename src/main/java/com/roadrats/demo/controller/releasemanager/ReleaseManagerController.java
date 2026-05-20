@@ -324,6 +324,24 @@ public class ReleaseManagerController {
         }
     }
 
+    /**
+     * GET /api/release-manager/deployments/log-file?path=2026/02-FEB/release-03-05/build.log
+     * Path is relative to roadrats.releases.logs-path (forward slashes).
+     */
+    @GetMapping("/deployments/log-file")
+    public ResponseEntity<?> readDeploymentLogFile(@RequestParam("path") String path) {
+        try {
+            return ResponseEntity.ok(deploymentFolderService.readLogFileContent(path));
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            Map<String, String> err = new LinkedHashMap<>();
+            err.put("error", "Bad Request");
+            err.put("message", e.getMessage());
+            return ResponseEntity.status(400).body(err);
+        } catch (Exception e) {
+            return serverError("Failed to read log file", path, e);
+        }
+    }
+
     // ======================================================================
     // GitHub Actions Integration
     // ======================================================================
@@ -337,8 +355,14 @@ public class ReleaseManagerController {
             @RequestParam(value = "workflow", required = false) String workflow,
             @RequestParam(value = "limit", defaultValue = "20") int limit) {
         try {
-            String wf = (workflow != null && !workflow.isEmpty()) ? workflow : config.getGithubWorkflow();
-            return ResponseEntity.ok(gitHubActionsService.listRuns(wf, limit));
+            if (workflow != null && !workflow.isEmpty()) {
+                return ResponseEntity.ok(gitHubActionsService.listRuns(workflow, limit));
+            }
+            var workflows = config.getGithubActionsWorkflows();
+            if (workflows.isEmpty()) {
+                return ResponseEntity.ok(gitHubActionsService.listRuns(config.getGithubWorkflow(), limit));
+            }
+            return ResponseEntity.ok(gitHubActionsService.listRunsAggregated(workflows, limit));
         } catch (IllegalStateException e) {
             return configError(e);
         } catch (Exception e) {

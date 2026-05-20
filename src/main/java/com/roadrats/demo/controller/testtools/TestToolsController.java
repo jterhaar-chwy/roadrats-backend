@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/api/test-tools")
+@RequestMapping("/api/wms360")
 public class TestToolsController {
 
     private static final Logger logger = LoggerFactory.getLogger(TestToolsController.class);
@@ -32,18 +32,21 @@ public class TestToolsController {
         this.itemImportService = itemImportService;
     }
 
-    /**
-     * GET /api/test-tools/lookup?type=order&value=xxx&warehouseId=CFF1
-     * Search types: order, container, oms
-     * warehouseId is required for order/container, optional for oms
-     */
+    private String normalizeEnv(String env) {
+        if (env == null) return "test";
+        String e = env.trim().toLowerCase();
+        return "prod".equals(e) ? "prod" : "test";
+    }
+
     @GetMapping("/lookup")
     public ResponseEntity<?> lookupOrder(
             @RequestParam String type,
             @RequestParam String value,
             @RequestParam(required = false, defaultValue = "") String warehouseId,
-            @RequestParam(required = false, defaultValue = "both") String stack) {
-        logger.info("GET /api/test-tools/lookup?type={}&value={}&warehouseId={}&stack={}", type, value, warehouseId, stack);
+            @RequestParam(required = false, defaultValue = "both") String stack,
+            @RequestParam(required = false, defaultValue = "test") String env) {
+        String nEnv = normalizeEnv(env);
+        logger.info("GET /api/wms360/lookup?type={}&value={}&warehouseId={}&stack={}&env={}", type, value, warehouseId, stack, nEnv);
 
         if (value == null || value.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "Search value is required"));
@@ -59,27 +62,93 @@ public class TestToolsController {
         }
 
         try {
-            Map<String, Object> result = orderLookupService.lookupOrder(type.trim(), value.trim(), warehouseId.trim(), normalizedStack);
+            Map<String, Object> result = orderLookupService.lookupOrder(type.trim(), value.trim(), warehouseId.trim(), normalizedStack, nEnv);
             return ResponseEntity.ok(result);
-        } catch (Exception e) {
-            logger.error("Error during order lookup", e);
+        } catch (Exception e2) {
+            logger.error("Error during order lookup", e2);
             Map<String, Object> error = new LinkedHashMap<>();
             error.put("error", "Failed to perform lookup");
-            error.put("message", e.getMessage());
+            error.put("message", e2.getMessage());
             return ResponseEntity.internalServerError().body(error);
         }
     }
 
     /**
-     * POST /api/test-tools/ship-order
-     * Body: { "warehouseId": "CFF1", "orderNumber": "xxx" }
+     * POST /api/wms360/lookup/v2/resolve
+     * Body: omsOrderNumber?, orderNumber?, containerId?, warehouseId?, stack (aad|io|both), env
+     * Returns all distinct (warehouseId, orderNumber, containerId, omsOrderNumber) rows found.
      */
+    @PostMapping("/lookup/v2/resolve")
+    public ResponseEntity<?> resolveLookupKeys(@RequestBody Map<String, String> body) {
+        String nEnv = normalizeEnv(body != null ? body.get("env") : null);
+        String stack = body != null && body.get("stack") != null ? body.get("stack").trim().toLowerCase() : "both";
+        if (!List.of("aad", "io", "both").contains(stack)) {
+            stack = "both";
+        }
+        logger.info("POST /api/wms360/lookup/v2/resolve stack={} env={}", stack, nEnv);
+
+        try {
+            Map<String, Object> result = orderLookupService.resolveOrderKeys(
+                body != null ? body.get("omsOrderNumber") : null,
+                body != null ? body.get("orderNumber") : null,
+                body != null ? body.get("containerId") : null,
+                body != null ? body.get("warehouseId") : null,
+                stack,
+                nEnv);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            logger.error("Error resolving lookup keys", e);
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * POST /api/wms360/lookup/v2/details
+     * Body: warehouseId, orderNumber, containerId?, stack, env
+     * Same data as classic lookup, plus "groups" bucketed for UI.
+     */
+    @PostMapping("/lookup/v2/details")
+    public ResponseEntity<?> lookupGrouped(@RequestBody Map<String, String> body) {
+        if (body == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Request body required"));
+        }
+        String wh = body.get("warehouseId");
+        String ord = body.get("orderNumber");
+        String nEnv = normalizeEnv(body.get("env"));
+        String stack = body.get("stack") != null ? body.get("stack").trim().toLowerCase() : "both";
+        if (!List.of("aad", "io", "both").contains(stack)) {
+            stack = "both";
+        }
+        logger.info("POST /api/wms360/lookup/v2/details wh={}, order={}, env={}", wh, ord, nEnv);
+
+        if (wh == null || wh.trim().isEmpty() || ord == null || ord.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "warehouseId and orderNumber are required"));
+        }
+
+        try {
+            Map<String, Object> result = orderLookupService.lookupOrderGrouped(
+                wh.trim(),
+                ord.trim(),
+                body.get("containerId") != null ? body.get("containerId").trim() : null,
+                stack,
+                nEnv);
+            if (result.containsKey("error")) {
+                return ResponseEntity.badRequest().body(result);
+            }
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            logger.error("Error during grouped lookup", e);
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
     @PostMapping("/ship-order")
     public ResponseEntity<?> shipOrder(@RequestBody Map<String, String> request) {
         String warehouseId = request.get("warehouseId");
         String orderNumber = request.get("orderNumber");
+        String nEnv = normalizeEnv(request.get("env"));
 
-        logger.info("POST /api/test-tools/ship-order wh={}, order={}", warehouseId, orderNumber);
+        logger.info("POST /api/wms360/ship-order wh={}, order={}, env={}", warehouseId, orderNumber, nEnv);
 
         if (warehouseId == null || warehouseId.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "warehouseId is required"));
@@ -89,7 +158,7 @@ public class TestToolsController {
         }
 
         try {
-            Map<String, Object> result = shipOrderService.shipOrder(warehouseId.trim(), orderNumber.trim());
+            Map<String, Object> result = shipOrderService.shipOrder(warehouseId.trim(), orderNumber.trim(), nEnv);
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             logger.error("Error shipping order", e);
@@ -100,16 +169,13 @@ public class TestToolsController {
         }
     }
 
-    /**
-     * POST /api/test-tools/ship-container
-     * Body: { "warehouseId": "CFF1", "containerId": "xxx" }
-     */
     @PostMapping("/ship-container")
     public ResponseEntity<?> shipContainer(@RequestBody Map<String, String> request) {
         String warehouseId = request.get("warehouseId");
         String containerId = request.get("containerId");
+        String nEnv = normalizeEnv(request.get("env"));
 
-        logger.info("POST /api/test-tools/ship-container wh={}, container={}", warehouseId, containerId);
+        logger.info("POST /api/wms360/ship-container wh={}, container={}, env={}", warehouseId, containerId, nEnv);
 
         if (warehouseId == null || warehouseId.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "warehouseId is required"));
@@ -119,7 +185,7 @@ public class TestToolsController {
         }
 
         try {
-            Map<String, Object> result = shipOrderService.shipContainer(warehouseId.trim(), containerId.trim());
+            Map<String, Object> result = shipOrderService.shipContainer(warehouseId.trim(), containerId.trim(), nEnv);
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             logger.error("Error shipping container", e);
@@ -130,37 +196,32 @@ public class TestToolsController {
         }
     }
 
-    /**
-     * GET /api/test-tools/connection-test
-     * Test database connectivity
-     */
     @GetMapping("/connection-test")
-    public ResponseEntity<?> testConnection() {
-        logger.info("GET /api/test-tools/connection-test");
+    public ResponseEntity<?> testConnection(@RequestParam(required = false, defaultValue = "test") String env) {
+        String nEnv = normalizeEnv(env);
+        logger.info("GET /api/wms360/connection-test?env={}", nEnv);
         try {
-            return ResponseEntity.ok(orderLookupService.testConnection());
+            return ResponseEntity.ok(orderLookupService.testConnection(nEnv));
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }
     }
 
-    /**
-     * GET /api/test-tools/resolve-order?type=order&value=xxx&warehouseId=CFF1
-     * Quick lookup on AAD for pick_container + pick_detail to support order actions.
-     */
     @GetMapping("/resolve-order")
     public ResponseEntity<?> resolveOrder(
             @RequestParam String type,
             @RequestParam String value,
-            @RequestParam(required = false, defaultValue = "") String warehouseId) {
-        logger.info("GET /api/test-tools/resolve-order?type={}&value={}&warehouseId={}", type, value, warehouseId);
+            @RequestParam(required = false, defaultValue = "") String warehouseId,
+            @RequestParam(required = false, defaultValue = "test") String env) {
+        String nEnv = normalizeEnv(env);
+        logger.info("GET /api/wms360/resolve-order?type={}&value={}&warehouseId={}&env={}", type, value, warehouseId, nEnv);
 
         if (value == null || value.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "Search value is required"));
         }
 
         try {
-            Map<String, Object> result = orderActionService.resolveOrder(type.trim(), value.trim(), warehouseId.trim());
+            Map<String, Object> result = orderActionService.resolveOrder(type.trim(), value.trim(), warehouseId.trim(), nEnv);
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             logger.error("Error resolving order", e);
@@ -168,10 +229,6 @@ public class TestToolsController {
         }
     }
 
-    /**
-     * POST /api/test-tools/setup-order
-     * Insert t_hu_master + t_stored_item to prepare order for shipping/floor deny/short ship.
-     */
     @PostMapping("/setup-order")
     public ResponseEntity<?> setupOrder(@RequestBody Map<String, String> request) {
         String warehouseId = request.get("warehouseId");
@@ -180,13 +237,14 @@ public class TestToolsController {
         String containerId = request.get("containerId");
         String itemOverride = request.get("itemOverride");
         String qtyStr = request.get("quantityOverride");
+        String nEnv = normalizeEnv(request.get("env"));
         Integer quantityOverride = null;
         if (qtyStr != null && !qtyStr.trim().isEmpty()) {
             try { quantityOverride = Integer.parseInt(qtyStr.trim()); } catch (NumberFormatException ignored) {}
         }
 
-        logger.info("POST /api/test-tools/setup-order wh={}, order={}, type={}, item={}, qty={}",
-            warehouseId, orderNumber, setupType, itemOverride, quantityOverride);
+        logger.info("POST /api/wms360/setup-order wh={}, order={}, type={}, item={}, qty={}, env={}",
+            warehouseId, orderNumber, setupType, itemOverride, quantityOverride, nEnv);
 
         if (warehouseId == null || warehouseId.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "warehouseId is required"));
@@ -197,7 +255,7 @@ public class TestToolsController {
 
         try {
             Map<String, Object> result = orderActionService.setupOrderData(
-                warehouseId.trim(), orderNumber.trim(), setupType, containerId, itemOverride, quantityOverride);
+                warehouseId.trim(), orderNumber.trim(), setupType, containerId, itemOverride, quantityOverride, nEnv);
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             logger.error("Error setting up order", e);
@@ -205,17 +263,14 @@ public class TestToolsController {
         }
     }
 
-    /**
-     * POST /api/test-tools/fulfillment-event
-     * Send a fulfillment status event (Wizmo) for a container.
-     */
     @PostMapping("/fulfillment-event")
     public ResponseEntity<?> sendFulfillmentEvent(@RequestBody Map<String, String> request) {
         String warehouseId = request.get("warehouseId");
         String containerId = request.get("containerId");
         String statusCode = request.get("statusCode");
+        String nEnv = normalizeEnv(request.get("env"));
 
-        logger.info("POST /api/test-tools/fulfillment-event wh={}, container={}, status={}", warehouseId, containerId, statusCode);
+        logger.info("POST /api/wms360/fulfillment-event wh={}, container={}, status={}, env={}", warehouseId, containerId, statusCode, nEnv);
 
         if (warehouseId == null || warehouseId.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "warehouseId is required"));
@@ -228,7 +283,7 @@ public class TestToolsController {
         }
 
         try {
-            Map<String, Object> result = orderActionService.sendFulfillmentEvent(warehouseId.trim(), containerId.trim(), statusCode.trim());
+            Map<String, Object> result = orderActionService.sendFulfillmentEvent(warehouseId.trim(), containerId.trim(), statusCode.trim(), nEnv);
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             logger.error("Error sending fulfillment event", e);
@@ -236,22 +291,20 @@ public class TestToolsController {
         }
     }
 
-    /**
-     * GET /api/test-tools/item-lookup?itemNumber=xxx&warehouseId=CFF1
-     * Look up an item in t_item_master. warehouseId is optional (searches all if blank).
-     */
     @GetMapping("/item-lookup")
     public ResponseEntity<?> lookupItem(
             @RequestParam String itemNumber,
-            @RequestParam(required = false, defaultValue = "") String warehouseId) {
-        logger.info("GET /api/test-tools/item-lookup?itemNumber={}&warehouseId={}", itemNumber, warehouseId);
+            @RequestParam(required = false, defaultValue = "") String warehouseId,
+            @RequestParam(required = false, defaultValue = "test") String env) {
+        String nEnv = normalizeEnv(env);
+        logger.info("GET /api/wms360/item-lookup?itemNumber={}&warehouseId={}&env={}", itemNumber, warehouseId, nEnv);
 
         if (itemNumber == null || itemNumber.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "itemNumber is required"));
         }
 
         try {
-            Map<String, Object> result = itemImportService.lookupItem(itemNumber.trim(), warehouseId.trim());
+            Map<String, Object> result = itemImportService.lookupItem(itemNumber.trim(), warehouseId.trim(), nEnv);
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             logger.error("Error looking up item", e);
@@ -259,23 +312,18 @@ public class TestToolsController {
         }
     }
 
-    /**
-     * POST /api/test-tools/item-import
-     * Import an item via XML gateway for one or more warehouses.
-     * Body: { "itemNumber": "xxx", "warehouses": ["CFF1","AVP1"], "description": "...",
-     *         "weight": "6.9", "length": "14.25", "width": "9.75", "height": "3.25", ... }
-     */
     @PostMapping("/item-import")
     public ResponseEntity<?> importItem(@RequestBody Map<String, Object> request) {
         String itemNumber = request.get("itemNumber") != null ? request.get("itemNumber").toString() : null;
-        logger.info("POST /api/test-tools/item-import item={}", itemNumber);
+        String nEnv = normalizeEnv(request.get("env") != null ? request.get("env").toString() : "test");
+        logger.info("POST /api/wms360/item-import item={}, env={}", itemNumber, nEnv);
 
         if (itemNumber == null || itemNumber.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "itemNumber is required"));
         }
 
         try {
-            Map<String, Object> result = itemImportService.importItem(request);
+            Map<String, Object> result = itemImportService.importItem(request, nEnv);
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             logger.error("Error importing item", e);

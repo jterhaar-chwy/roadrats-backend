@@ -1,6 +1,6 @@
 package com.roadrats.demo.service.testtools;
 
-import com.roadrats.demo.config.TestToolsConfig;
+import com.roadrats.demo.config.Wms360Config;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -18,10 +18,10 @@ public class ItemImportService {
 
     private static final Logger logger = LoggerFactory.getLogger(ItemImportService.class);
 
-    private final TestToolsConfig config;
+    private final Wms360Config config;
     private final HttpClient httpClient;
 
-    public ItemImportService(TestToolsConfig config) {
+    public ItemImportService(Wms360Config config) {
         this.config = config;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(15))
@@ -32,10 +32,10 @@ public class ItemImportService {
      * Look up an item in t_item_master on AAD for one or more warehouses.
      * If warehouseId is blank, searches across all warehouses.
      */
-    public Map<String, Object> lookupItem(String itemNumber, String warehouseId) {
+    public Map<String, Object> lookupItem(String itemNumber, String warehouseId, String env) {
         Map<String, Object> result = new LinkedHashMap<>();
-        String jdbcUrl = config.buildAadJdbcUrl();
-        logger.info("lookupItem: item={}, wh={}", itemNumber, warehouseId);
+        String jdbcUrl = config.buildAadJdbcUrl(env);
+        logger.info("lookupItem: item={}, wh={}, env={}", itemNumber, warehouseId, env);
 
         try {
             Class.forName(config.getDriverClassName());
@@ -46,7 +46,8 @@ public class ItemImportService {
         }
 
         try (Connection conn = DriverManager.getConnection(jdbcUrl)) {
-            result.put("connection", config.getAadServer() + " / " + config.getAadDatabase());
+            result.put("connection", config.getAadServer(env) + " / " + config.getAadDatabase(env));
+            result.put("environment", env);
 
             boolean hasWh = warehouseId != null && !warehouseId.trim().isEmpty();
 
@@ -123,10 +124,16 @@ public class ItemImportService {
     /**
      * Build the import XML and POST to the XML gateway for each warehouse.
      */
-    public Map<String, Object> importItem(Map<String, Object> params) {
+    public Map<String, Object> importItem(Map<String, Object> params, String env) {
         Map<String, Object> result = new LinkedHashMap<>();
-        List<Map<String, Object>> importResults = new ArrayList<>();
 
+        if (Wms360Config.isProd(env)) {
+            result.put("success", false);
+            result.put("error", "Item import is not allowed in production environment");
+            return result;
+        }
+
+        List<Map<String, Object>> importResults = new ArrayList<>();
         String itemNumber = getStr(params, "itemNumber");
         @SuppressWarnings("unchecked")
         List<String> warehouses = (List<String>) params.get("warehouses");

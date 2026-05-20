@@ -46,6 +46,41 @@ public class GitHubActionsService {
     }
 
     /**
+     * List recent runs across several workflows, merge, dedupe by run id, newest first.
+     */
+    public List<Map<String, Object>> listRunsAggregated(List<String> workflows, int limit) throws Exception {
+        if (workflows == null || workflows.isEmpty()) {
+            return listRuns(null, limit);
+        }
+        if (workflows.size() == 1) {
+            return listRuns(workflows.get(0), limit);
+        }
+        int perWorkflow = Math.min(50, Math.max(limit, (limit + workflows.size() - 1) / workflows.size() + 3));
+        List<Map<String, Object>> merged = new ArrayList<>();
+        for (String wf : workflows) {
+            try {
+                merged.addAll(listRuns(wf, perWorkflow));
+            } catch (Exception e) {
+                log.warn("Skipping workflow {}: {}", wf, e.getMessage());
+            }
+        }
+        merged.sort((a, b) -> String.valueOf(b.getOrDefault("createdAt", ""))
+            .compareTo(String.valueOf(a.getOrDefault("createdAt", ""))));
+        Set<Object> seen = new LinkedHashSet<>();
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> run : merged) {
+            Object id = run.get("databaseId");
+            if (id != null && seen.add(id)) {
+                out.add(run);
+            }
+        }
+        if (out.size() > limit) {
+            return new ArrayList<>(out.subList(0, limit));
+        }
+        return out;
+    }
+
+    /**
      * Get details for a specific workflow run.
      */
     public Map<String, Object> getRunDetails(long runId) throws Exception {

@@ -1,21 +1,22 @@
 package com.roadrats.demo.service.testtools;
 
-import com.roadrats.demo.config.TestToolsConfig;
+import com.roadrats.demo.config.Wms360Config;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.sql.*;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 public class OrderLookupService {
 
     private static final Logger logger = LoggerFactory.getLogger(OrderLookupService.class);
 
-    private final TestToolsConfig config;
+    private final Wms360Config config;
 
-    public OrderLookupService(TestToolsConfig config) {
+    public OrderLookupService(Wms360Config config) {
         this.config = config;
     }
 
@@ -23,7 +24,7 @@ public class OrderLookupService {
      * @param stack "aad", "io", or "both"
      */
     @SuppressWarnings("unchecked")
-    public Map<String, Object> lookupOrder(String searchType, String searchValue, String warehouseId, String stack) {
+    public Map<String, Object> lookupOrder(String searchType, String searchValue, String warehouseId, String stack, String env) {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("searchType", searchType);
         response.put("searchValue", searchValue);
@@ -41,17 +42,18 @@ public class OrderLookupService {
         boolean queryIo = "io".equals(stack) || "both".equals(stack);
 
         // Include connection details in response for verification
+        response.put("environment", env);
         if (queryAad) {
-            response.put("aadConnection", config.getAadServer() + " / " + config.getAadDatabase());
-            logger.info("AAD JDBC URL: {}", config.buildAadJdbcUrl());
+            response.put("aadConnection", config.getAadServer(env) + " / " + config.getAadDatabase(env));
+            logger.info("AAD JDBC URL: {}", config.buildAadJdbcUrl(env));
         }
         if (queryIo) {
-            response.put("ioConnection", config.getIoServer() + " / " + config.getIoDatabase());
-            logger.info("IO JDBC URL: {}", config.buildIoJdbcUrl());
+            response.put("ioConnection", config.getIoServer(env) + " / " + config.getIoDatabase(env));
+            logger.info("IO JDBC URL: {}", config.buildIoJdbcUrl(env));
         }
 
         // Resolve identifiers on the primary stack
-        String resolveUrl = queryAad ? config.buildAadJdbcUrl() : config.buildIoJdbcUrl();
+        String resolveUrl = queryAad ? config.buildAadJdbcUrl(env) : config.buildIoJdbcUrl(env);
         String orderNumber = null;
         String containerId = null;
         String resolvedWhId = warehouseId;
@@ -113,30 +115,366 @@ public class OrderLookupService {
         List<Map<String, Object>> tables = new ArrayList<>();
 
         if (queryAad) {
-            try (Connection conn = DriverManager.getConnection(config.buildAadJdbcUrl())) {
+            try (Connection conn = DriverManager.getConnection(config.buildAadJdbcUrl(env))) {
                 conn.setTransactionIsolation(Connection.TRANSACTION_READ_UNCOMMITTED);
                 tables.addAll(buildAadTables(conn, orderNumber, containerId, resolvedWhId));
             } catch (SQLException e) {
                 logger.error("AAD connection failed", e);
                 tables.add(errorTable("aad_connection", "AAD Connection Error", "AAD", "Connection",
-                    "Failed to connect to " + config.getAadServer() + ": " + e.getMessage()));
+                    "Failed to connect to " + config.getAadServer(env) + ": " + e.getMessage()));
             }
         }
 
         if (queryIo) {
-            try (Connection conn = DriverManager.getConnection(config.buildIoJdbcUrl())) {
+            try (Connection conn = DriverManager.getConnection(config.buildIoJdbcUrl(env))) {
                 conn.setTransactionIsolation(Connection.TRANSACTION_READ_UNCOMMITTED);
                 tables.addAll(buildIoTables(conn, orderNumber, containerId, resolvedWhId));
             } catch (SQLException e) {
                 logger.error("IO connection failed", e);
                 tables.add(errorTable("io_connection", "IO Connection Error", "IO", "Connection",
-                    "Failed to connect to " + config.getIoServer() + ": " + e.getMessage()));
+                    "Failed to connect to " + config.getIoServer(env) + ": " + e.getMessage()));
             }
         }
 
         response.put("tables", tables);
         logger.info("Order lookup complete: {} tables returned for stack={}", tables.size(), stack);
         return response;
+    }
+
+    /**
+     * Resolve all warehouse / order / container / OMS key combinations from any provided subset of identifiers.
+     * Runs against AAD when stack is aad or both; against IO when stack is io or both; merges distinct rows.
+     */
+    public Map<String, Object> resolveOrderKeys(
+            String omsOrderNumber,
+            String orderNumber,
+            String containerId,
+            String warehouseId,
+            String stack,
+            String env) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("queriedAt", new java.util.Date().toString());
+        response.put("stack", stack);
+        response.put("environment", env);
+
+        try {
+            Class.forName(config.getDriverClassName());
+        } catch (ClassNotFoundException e) {
+            response.put("error", "JDBC driver not found: " + e.getMessage());
+            return response;
+        }
+
+        String oms = emptyToNull(omsOrderNumber);
+        String ord = emptyToNull(orderNumber);
+        String cont = emptyToNull(containerId);
+        String wh = emptyToNull(warehouseId);
+
+        if (oms == null && ord == null && cont == null) {
+            response.put("error", "Provide at least one of: omsOrderNumber, orderNumber, containerId (with warehouseId)");
+            return response;
+        }
+        if (cont != null && wh == null && ord == null && oms == null) {
+            response.put("error", "warehouseId is required when searching by containerId");
+            return response;
+        }
+
+        boolean useAad = "aad".equals(stack) || "both".equals(stack);
+        boolean useIo = "io".equals(stack) || "both".equals(stack);
+
+        if (useAad) {
+            response.put("aadConnection", config.getAadServer(env) + " / " + config.getAadDatabase(env));
+        }
+        if (useIo) {
+            response.put("ioConnection", config.getIoServer(env) + " / " + config.getIoDatabase(env));
+        }
+
+        LinkedHashSet<KeyRow> merged = new LinkedHashSet<>();
+
+        try {
+            if (useAad) {
+                try (Connection conn = DriverManager.getConnection(config.buildAadJdbcUrl(env))) {
+                    conn.setTransactionIsolation(Connection.TRANSACTION_READ_UNCOMMITTED);
+                    merged.addAll(resolveKeysOnConnection(conn, oms, ord, cont, wh));
+                }
+            }
+            if (useIo) {
+                try (Connection conn = DriverManager.getConnection(config.buildIoJdbcUrl(env))) {
+                    conn.setTransactionIsolation(Connection.TRANSACTION_READ_UNCOMMITTED);
+                    merged.addAll(resolveKeysOnConnection(conn, oms, ord, cont, wh));
+                }
+            }
+        } catch (SQLException e) {
+            response.put("error", "Resolution failed: " + e.getMessage());
+            return response;
+        }
+
+        List<Map<String, Object>> keyRows = new ArrayList<>();
+        for (KeyRow kr : merged) {
+            keyRows.add(kr.toMap());
+        }
+        response.put("keyRowCount", keyRows.size());
+        response.put("keyRows", keyRows);
+        if (keyRows.isEmpty()) {
+            response.put("message", "No matching keys found for the given inputs.");
+        }
+        return response;
+    }
+
+    /**
+     * Grouped lookup: same queries as {@link #lookupOrder} but results bucketed for UI (v2).
+     */
+    public Map<String, Object> lookupOrderGrouped(
+            String warehouseId,
+            String orderNumber,
+            String containerId,
+            String stack,
+            String env) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("queriedAt", new java.util.Date().toString());
+        response.put("stack", stack);
+        response.put("environment", env);
+        response.put("warehouseId", warehouseId);
+        response.put("orderNumber", orderNumber);
+        response.put("containerId", containerId);
+
+        try {
+            Class.forName(config.getDriverClassName());
+        } catch (ClassNotFoundException e) {
+            response.put("error", "JDBC driver not found: " + e.getMessage());
+            return response;
+        }
+
+        if (warehouseId == null || warehouseId.isEmpty() || orderNumber == null || orderNumber.isEmpty()) {
+            response.put("error", "warehouseId and orderNumber are required for grouped lookup");
+            return response;
+        }
+
+        boolean queryAad = "aad".equals(stack) || "both".equals(stack);
+        boolean queryIo = "io".equals(stack) || "both".equals(stack);
+
+        if (queryAad) {
+            response.put("aadConnection", config.getAadServer(env) + " / " + config.getAadDatabase(env));
+        }
+        if (queryIo) {
+            response.put("ioConnection", config.getIoServer(env) + " / " + config.getIoDatabase(env));
+        }
+
+        List<Map<String, Object>> flat = new ArrayList<>();
+
+        if (queryAad) {
+            try (Connection conn = DriverManager.getConnection(config.buildAadJdbcUrl(env))) {
+                conn.setTransactionIsolation(Connection.TRANSACTION_READ_UNCOMMITTED);
+                flat.addAll(buildAadTables(conn, orderNumber, containerId, warehouseId));
+            } catch (SQLException e) {
+                flat.add(errorTable("aad_connection", "AAD Connection Error", "AAD", "Connection",
+                    "Failed to connect to " + config.getAadServer(env) + ": " + e.getMessage()));
+            }
+        }
+
+        if (queryIo) {
+            try (Connection conn = DriverManager.getConnection(config.buildIoJdbcUrl(env))) {
+                conn.setTransactionIsolation(Connection.TRANSACTION_READ_UNCOMMITTED);
+                flat.addAll(buildIoTables(conn, orderNumber, containerId, warehouseId));
+            } catch (SQLException e) {
+                flat.add(errorTable("io_connection", "IO Connection Error", "IO", "Connection",
+                    "Failed to connect to " + config.getIoServer(env) + ": " + e.getMessage()));
+            }
+        }
+
+        response.put("groups", partitionTablesIntoGroups(flat));
+        response.put("tables", flat);
+        return response;
+    }
+
+    private static String emptyToNull(String s) {
+        if (s == null) return null;
+        String t = s.trim();
+        return t.isEmpty() ? null : t;
+    }
+
+    private static final class KeyRow {
+        final String warehouseId;
+        final String orderNumber;
+        final String containerId;
+        final String omsOrderNumber;
+
+        KeyRow(String warehouseId, String orderNumber, String containerId, String omsOrderNumber) {
+            this.warehouseId = warehouseId;
+            this.orderNumber = orderNumber;
+            this.containerId = containerId;
+            this.omsOrderNumber = omsOrderNumber;
+        }
+
+        Map<String, Object> toMap() {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("warehouseId", warehouseId);
+            m.put("orderNumber", orderNumber);
+            m.put("containerId", containerId);
+            m.put("omsOrderNumber", omsOrderNumber);
+            return m;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof KeyRow)) return false;
+            KeyRow k = (KeyRow) o;
+            return Objects.equals(warehouseId, k.warehouseId)
+                && Objects.equals(orderNumber, k.orderNumber)
+                && Objects.equals(containerId, k.containerId)
+                && Objects.equals(omsOrderNumber, k.omsOrderNumber);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(warehouseId, orderNumber, containerId, omsOrderNumber);
+        }
+    }
+
+    private Set<KeyRow> resolveKeysOnConnection(
+            Connection conn,
+            String oms,
+            String ord,
+            String cont,
+            String wh) throws SQLException {
+
+        List<KeyRow> base = new ArrayList<>();
+
+        if (oms != null) {
+            Map<String, Object> r = executeQuery(conn,
+                "SELECT DISTINCT wh_id, order_number, oms_order_number FROM t_order_detail WHERE oms_order_number = ?",
+                oms);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> rows = (List<Map<String, Object>>) r.get("rows");
+            for (Map<String, Object> row : rows) {
+                base.add(new KeyRow(
+                    str(row.get("wh_id")),
+                    str(row.get("order_number")),
+                    null,
+                    str(row.get("oms_order_number"))));
+            }
+        } else if (cont != null && wh != null) {
+            Map<String, Object> r = executeQuery(conn,
+                "SELECT DISTINCT order_number FROM t_pick_container WHERE wh_id = ? AND container_id = ?",
+                wh, cont);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> rows = (List<Map<String, Object>>) r.get("rows");
+            for (Map<String, Object> row : rows) {
+                String on = str(row.get("order_number"));
+                if (on != null) {
+                    base.add(new KeyRow(wh, on, cont, null));
+                }
+            }
+        } else if (ord != null && wh != null) {
+            base.add(new KeyRow(wh, ord, null, null));
+        } else if (ord != null) {
+            Map<String, Object> r = executeQuery(conn,
+                "SELECT DISTINCT TOP 200 wh_id, order_number FROM t_pick_container WHERE order_number = ?",
+                ord);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> rows = (List<Map<String, Object>>) r.get("rows");
+            for (Map<String, Object> row : rows) {
+                base.add(new KeyRow(str(row.get("wh_id")), str(row.get("order_number")), null, null));
+            }
+        }
+
+        // Do not filter by container here — candidates often have containerId null until expanded.
+        base = filterKeyCandidates(base, oms, ord, wh);
+
+        LinkedHashSet<KeyRow> out = new LinkedHashSet<>();
+        for (KeyRow kr : base) {
+            if (kr.orderNumber == null || kr.warehouseId == null) {
+                continue;
+            }
+            String omsVal = kr.omsOrderNumber;
+            if (omsVal == null) {
+                omsVal = lookupOmsForOrder(conn, kr.warehouseId, kr.orderNumber);
+            }
+            List<String> containers = kr.containerId != null
+                ? Collections.singletonList(kr.containerId)
+                : listContainersForOrder(conn, kr.warehouseId, kr.orderNumber);
+            if (containers.isEmpty()) {
+                out.add(new KeyRow(kr.warehouseId, kr.orderNumber, null, omsVal));
+            } else {
+                for (String c : containers) {
+                    out.add(new KeyRow(kr.warehouseId, kr.orderNumber, c, omsVal));
+                }
+            }
+        }
+        if (cont != null) {
+            out.removeIf(k -> k.containerId == null || !cont.equals(k.containerId));
+        }
+        return out;
+    }
+
+    private static List<KeyRow> filterKeyCandidates(List<KeyRow> base, String oms, String ord, String wh) {
+        return base.stream()
+            .filter(k -> wh == null || wh.equals(k.warehouseId))
+            .filter(k -> ord == null || ord.equals(k.orderNumber))
+            .filter(k -> oms == null || oms.equals(k.omsOrderNumber))
+            .collect(Collectors.toList());
+    }
+
+    private String lookupOmsForOrder(Connection conn, String whId, String orderNumber) throws SQLException {
+        Map<String, Object> r = executeQuery(conn,
+            "SELECT TOP 1 oms_order_number FROM t_order_detail WHERE wh_id = ? AND order_number = ?",
+            whId, orderNumber);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) r.get("rows");
+        if (rows.isEmpty()) return null;
+        return str(rows.get(0).get("oms_order_number"));
+    }
+
+    private List<String> listContainersForOrder(Connection conn, String whId, String orderNumber) throws SQLException {
+        Map<String, Object> r = executeQuery(conn,
+            "SELECT DISTINCT container_id FROM t_pick_container WHERE wh_id = ? AND order_number = ?",
+            whId, orderNumber);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) r.get("rows");
+        List<String> ids = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            String c = str(row.get("container_id"));
+            if (c != null) {
+                ids.add(c);
+            }
+        }
+        return ids;
+    }
+
+    private static String str(Object o) {
+        return o == null ? null : String.valueOf(o);
+    }
+
+    private Map<String, List<Map<String, Object>>> partitionTablesIntoGroups(List<Map<String, Object>> tables) {
+        Map<String, List<Map<String, Object>>> groups = new LinkedHashMap<>();
+        groups.put("orderInformation", new ArrayList<>());
+        groups.put("containerAndPick", new ArrayList<>());
+        groups.put("queues", new ArrayList<>());
+        groups.put("preProcessing", new ArrayList<>());
+        groups.put("logsAndExceptions", new ArrayList<>());
+        groups.put("other", new ArrayList<>());
+
+        for (Map<String, Object> t : tables) {
+            String grp = String.valueOf(t.getOrDefault("group", ""));
+            String bucket;
+            if ("Order".equals(grp) || "Import".equals(grp) || "Order (IO)".equals(grp)) {
+                bucket = "orderInformation";
+            } else if ("Pick & Container".equals(grp) || "Pick & Container (IO)".equals(grp) || "Shipping".equals(grp)) {
+                bucket = "containerAndPick";
+            } else if ("Queues".equals(grp)) {
+                bucket = "queues";
+            } else if ("Pre-Processing".equals(grp)) {
+                bucket = "preProcessing";
+            } else if ("Logs".equals(grp)) {
+                bucket = "logsAndExceptions";
+            } else if ("Connection".equals(grp)) {
+                bucket = "other";
+            } else {
+                bucket = "other";
+            }
+            groups.get(bucket).add(t);
+        }
+        return groups;
     }
 
     // ======================== AAD Stack (WMSSQL-TEST / AAD) ========================
@@ -387,16 +725,17 @@ public class OrderLookupService {
         return result;
     }
 
-    public Map<String, Object> testConnection() {
+    public Map<String, Object> testConnection(String env) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("ioServer", config.getIoServer());
-        result.put("ioDatabase", config.getIoDatabase());
-        result.put("aadServer", config.getAadServer());
-        result.put("aadDatabase", config.getAadDatabase());
+        result.put("environment", env);
+        result.put("ioServer", config.getIoServer(env));
+        result.put("ioDatabase", config.getIoDatabase(env));
+        result.put("aadServer", config.getAadServer(env));
+        result.put("aadDatabase", config.getAadDatabase(env));
 
         try {
             Class.forName(config.getDriverClassName());
-            try (Connection conn = DriverManager.getConnection(config.buildIoJdbcUrl())) {
+            try (Connection conn = DriverManager.getConnection(config.buildIoJdbcUrl(env))) {
                 result.put("ioStatus", "Connected");
             }
         } catch (Exception e) {
@@ -404,7 +743,7 @@ public class OrderLookupService {
         }
 
         try {
-            try (Connection conn = DriverManager.getConnection(config.buildAadJdbcUrl())) {
+            try (Connection conn = DriverManager.getConnection(config.buildAadJdbcUrl(env))) {
                 result.put("aadStatus", "Connected");
             }
         } catch (Exception e) {

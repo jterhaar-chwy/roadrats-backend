@@ -1,6 +1,6 @@
 package com.roadrats.demo.service.testtools;
 
-import com.roadrats.demo.config.TestToolsConfig;
+import com.roadrats.demo.config.Wms360Config;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -13,17 +13,24 @@ public class ShipOrderService {
 
     private static final Logger logger = LoggerFactory.getLogger(ShipOrderService.class);
 
-    private final TestToolsConfig config;
+    private final Wms360Config config;
 
-    public ShipOrderService(TestToolsConfig config) {
+    public ShipOrderService(Wms360Config config) {
         this.config = config;
     }
 
-    public Map<String, Object> shipOrder(String warehouseId, String orderNumber) {
+    public Map<String, Object> shipOrder(String warehouseId, String orderNumber, String env) {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("warehouseId", warehouseId);
         response.put("orderNumber", orderNumber);
+        response.put("environment", env);
         response.put("executedAt", new java.util.Date().toString());
+
+        if (Wms360Config.isProd(env)) {
+            response.put("success", false);
+            response.put("message", "Ship order is not allowed in production environment");
+            return response;
+        }
 
         try {
             Class.forName(config.getDriverClassName());
@@ -33,8 +40,8 @@ public class ShipOrderService {
             return response;
         }
 
-        String jdbcUrl = config.buildAadJdbcUrl();
-        logger.info("Ship order: wh={}, order={}, url={}", warehouseId, orderNumber, jdbcUrl);
+        String jdbcUrl = config.buildAadJdbcUrl(env);
+        logger.info("Ship order: wh={}, order={}, env={}, url={}", warehouseId, orderNumber, env, jdbcUrl);
 
         try (Connection conn = DriverManager.getConnection(jdbcUrl)) {
             try (CallableStatement cs = conn.prepareCall("{? = call dbo.usp_nonprod_order_ship(?, ?)}")) {
@@ -60,11 +67,18 @@ public class ShipOrderService {
         return response;
     }
 
-    public Map<String, Object> shipContainer(String warehouseId, String containerId) {
+    public Map<String, Object> shipContainer(String warehouseId, String containerId, String env) {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("warehouseId", warehouseId);
         response.put("containerId", containerId);
+        response.put("environment", env);
         response.put("executedAt", new java.util.Date().toString());
+
+        if (Wms360Config.isProd(env)) {
+            response.put("success", false);
+            response.put("message", "Ship container is not allowed in production environment");
+            return response;
+        }
 
         try {
             Class.forName(config.getDriverClassName());
@@ -74,8 +88,8 @@ public class ShipOrderService {
             return response;
         }
 
-        String jdbcUrl = config.buildAadJdbcUrl();
-        logger.info("Ship container: wh={}, container={}, url={}", warehouseId, containerId, jdbcUrl);
+        String jdbcUrl = config.buildAadJdbcUrl(env);
+        logger.info("Ship container: wh={}, container={}, env={}, url={}", warehouseId, containerId, env, jdbcUrl);
 
         try (Connection conn = DriverManager.getConnection(jdbcUrl)) {
             try (CallableStatement cs = conn.prepareCall("{? = call dbo.usp_nonprod_container_ship(?, ?)}")) {
