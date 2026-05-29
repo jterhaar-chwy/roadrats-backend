@@ -14,6 +14,11 @@ import javax.sql.DataSource;
 @EnableTransactionManagement
 public class DatabaseConfig {
 
+    private static final String CLS_PROD_SERVER = "wmssql-cls";
+    private static final String CLS_TEST_SERVER = "wmssql-cls-test";
+    private static final String CLS_PROD_DATABASE = "DMSServer";
+    private static final String CLS_TEST_DATABASE = "DMSServer_320";
+
     // CLS Database Configuration (Primary)
     @Primary
     @Bean(name = "clsDataSource")
@@ -23,20 +28,22 @@ public class DatabaseConfig {
             @Value("${spring.datasource.cls.password}") String password,
             @Value("${spring.datasource.cls.driver-class-name}") String driverClassName) {
         org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(DatabaseConfig.class);
+        String normalizedUrl = normalizeClsJdbcUrl(url, logger);
         
         // Log connection info (without password)
         logger.info("Configuring CLS DataSource:");
-        logger.info("  URL: {}", url);
+        logger.info("  URL: {}", normalizedUrl);
         logger.info("  Username: {}", username);
         logger.info("  Password: {}", password.isEmpty() ? "[EMPTY]" : "[SET]");
         logger.info("  Driver: {}", driverClassName);
         
         HikariConfig config = new HikariConfig();
-        config.setJdbcUrl(url);
+        config.setJdbcUrl(normalizedUrl);
         
         // For Windows Authentication (integratedSecurity or JavaKerberos), don't set username/password
         // JavaKerberos is pure Java and doesn't require native DLLs
-        boolean useWindowsAuth = url.contains("integratedSecurity=true") || url.contains("authenticationScheme=JavaKerberos");
+        boolean useWindowsAuth = normalizedUrl.contains("integratedSecurity=true")
+                || normalizedUrl.contains("authenticationScheme=JavaKerberos");
         
         if (useWindowsAuth) {
             logger.info("  Using Windows Authentication - skipping username/password");
@@ -78,6 +85,33 @@ public class DatabaseConfig {
         }
         
         return dataSource;
+    }
+
+    private String normalizeClsJdbcUrl(String url, org.slf4j.Logger logger) {
+        if (url == null || url.isBlank()) {
+            return url;
+        }
+
+        String lowerUrl = url.toLowerCase();
+        if (lowerUrl.contains(CLS_PROD_SERVER)) {
+            return replaceDatabaseName(url, CLS_PROD_DATABASE, logger);
+        }
+        if (lowerUrl.contains(CLS_TEST_SERVER)) {
+            return replaceDatabaseName(url, CLS_TEST_DATABASE, logger);
+        }
+
+        return url;
+    }
+
+    private String replaceDatabaseName(String url, String databaseName, org.slf4j.Logger logger) {
+        String updatedUrl = url.replaceAll("(?i)databaseName=[^;]*", "databaseName=" + databaseName);
+        if (!updatedUrl.equals(url)) {
+            logger.info("  Normalized CLS databaseName to {}", databaseName);
+            return updatedUrl;
+        }
+
+        logger.info("  Appending CLS databaseName={}", databaseName);
+        return url + (url.endsWith(";") ? "" : ";") + "databaseName=" + databaseName;
     }
 
     // IO Database Configuration

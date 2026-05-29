@@ -1,0 +1,19 @@
+<service>
+  <id>WMS360Frontend</id>
+  <name>WMS360 Frontend</name>
+  <description>WMS360 Next.js frontend</description>
+
+  <executable>%BASE%\start-frontend.cmd</executable>
+  <workingdirectory>%BASE%</workingdirectory>
+
+  <startmode>Automatic</startmode>
+
+  <log mode="roll-by-size-time">
+    <sizeThreshold>10240</sizeThreshold>
+    <pattern>yyyyMMdd</pattern>
+    <keepFiles>14</keepFiles>
+  </log>
+
+  <onfailure action="restart" delay="10 sec" />
+  <onfailure action="restart" delay="30 sec" />
+</service>
